@@ -1,0 +1,52 @@
+name: Annual Auto-Update & Maintenance
+
+on:
+  schedule:
+    # Runs at 00:00 UTC on January 1st every year
+    - cron: '0 0 1 1 *'
+  workflow_dispatch:
+    inputs:
+      force_bump:
+        description: 'Force manual annual update'
+        required: false
+        default: 'false'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  annual-maintenance:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci || npm install
+
+      - name: Verify Web Audio Synthesizer Build
+        run: npm run build
+
+      - name: Compute Dynamic Calendar Metadata
+        id: year_meta
+        run: |
+          YEAR=$(date +'%Y')
+          echo "CURRENT_YEAR=$YEAR" >> $GITHUB_OUTPUT
+          echo "Automated Yearly Maintenance check for $YEAR completed successfully."
+
+      - name: Update Lockfile and Engine Timestamps
+        run: |
+          npm audit fix --package-lock-only || true
+
+      - name: Commit & Push Annual Verification
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore(engine): automated annual verification for ${{ steps.year_meta.outputs.CURRENT_YEAR }} [skip ci]"
+          file_pattern: "package*.json"
