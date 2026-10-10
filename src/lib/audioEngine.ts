@@ -179,6 +179,15 @@ export class PhonkAudioEngine {
   private cowbellDecay = 0.35;
   private subGlide = 0.12;
   private vinylLevel = 0.08;
+  private swing = 0.15; // Brazilian funk syncopation swing (0 to 0.5)
+
+  // Track Mute / Solo states
+  private mutes: boolean[] = Array(8).fill(false);
+  private solos: boolean[] = Array(8).fill(false);
+
+  // Live session audio recording
+  private mediaRecorder: MediaRecorder | null = null;
+  private recordedChunks: Blob[] = [];
 
   // 808 glide tracking
   private lastSubFreq = 42;
@@ -664,15 +673,20 @@ export class PhonkAudioEngine {
     while (this.nextStepTime < this.ctx.currentTime + lookaheadTime) {
       // Trigger active notes for current step
       const step = this.currentStep;
+      // Brazilian syncopation swing applied to odd 16th steps
+      const isOdd = step % 2 === 1;
+      const swingOffset = isOdd ? stepDuration * (this.swing * 0.4) : 0;
+      const triggerTime = this.nextStepTime + swingOffset;
+
       for (let track = 0; track < pattern.length; track++) {
         if (pattern[track][step]) {
-          this.scheduleNote(track, this.nextStepTime);
+          this.scheduleNote(track, triggerTime);
         }
       }
 
       // Sync step indicator with audio clock
       const scheduledStep = this.currentStep;
-      const delayMs = Math.max(0, (this.nextStepTime - this.ctx.currentTime) * 1000);
+      const delayMs = Math.max(0, (triggerTime - this.ctx.currentTime) * 1000);
       setTimeout(() => {
         if (this.isPlaying) {
           this.notifyStep(scheduledStep);
@@ -687,6 +701,14 @@ export class PhonkAudioEngine {
   }
 
   private scheduleNote(trackIndex: number, time: number) {
+    // Check solo and mute states
+    const hasActiveSolo = this.solos.some(Boolean);
+    if (hasActiveSolo) {
+      if (!this.solos[trackIndex]) return;
+    } else if (this.mutes[trackIndex]) {
+      return;
+    }
+
     switch (trackIndex) {
       case 0:
         this.playCowbell(this.cowbellPitchMultiplier, this.cowbellDecay, time);
@@ -716,6 +738,69 @@ export class PhonkAudioEngine {
   }
 
   // --- PARAMETERS SETTERS ---
+
+  public setMute(trackIndex: number, isMuted: boolean) {
+    if (trackIndex >= 0 && trackIndex < 8) {
+      this.mutes[trackIndex] = isMuted;
+    }
+  }
+
+  public setSolo(trackIndex: number, isSoloed: boolean) {
+    if (trackIndex >= 0 && trackIndex < 8) {
+      this.solos[trackIndex] = isSoloed;
+    }
+  }
+
+  public setSwing(amount: number) {
+    this.swing = Math.max(0, Math.min(0.6, amount));
+  }
+
+  public getSwing(): number {
+    return this.swing;
+  }
+
+  /**
+   * Start live session recording directly from master audio bus
+   */
+  public startLiveRecording(): boolean {
+    this.init();
+    if (!this.ctx || !this.masterGain) return false;
+    try {
+      // Connect master gain to media stream destination
+      const dest = this.ctx.createMediaStreamDestination();
+      this.masterGain.connect(dest);
+      this.recordedChunks = [];
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus'
+        : 'audio/webm';
+      this.mediaRecorder = new MediaRecorder(dest.stream, { mimeType });
+      this.mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) this.recordedChunks.push(e.data);
+      };
+      this.mediaRecorder.start(100);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Stop recording and return Audio Blob
+   */
+  public stopLiveRecording(): Promise<Blob | null> {
+    return new Promise((resolve) => {
+      if (!this.mediaRecorder || this.mediaRecorder.state === 'inactive') {
+        resolve(null);
+        return;
+      }
+      this.mediaRecorder.onstop = () => {
+        const blob = new Blob(this.recordedChunks, { type: 'audio/webm' });
+        this.recordedChunks = [];
+        resolve(blob);
+      };
+      this.mediaRecorder.stop();
+    });
+  }
 
   public setMasterVolume(val: number) {
     this.masterVolume = Math.max(0, Math.min(1.5, val));

@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { audioEngine, TRACK_CONFIGS, PHONK_PRESETS } from '../lib/audioEngine';
-import { Play, Square, Download, RotateCcw, Shuffle, Sparkles, FileAudio, FileCode } from 'lucide-react';
+import { Play, Square, RotateCcw, Shuffle, Sparkles, FileAudio, FileCode, Circle, Mic, SlidersHorizontal, Radio } from 'lucide-react';
 import { useToast } from '../hooks/use-toast';
 
 interface SequencerProps {
@@ -14,6 +14,15 @@ export const Sequencer: React.FC<SequencerProps> = ({ onPlayStateChange, externa
   const [bpm, setBpm] = useState(135);
   const [currentStep, setCurrentStep] = useState(0);
   const [isExportingWav, setIsExportingWav] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [swing, setSwing] = useState(15); // Percentage (0% to 50%)
+
+  // Track Mute & Solo States
+  const [mutes, setMutes] = useState<boolean[]>(Array(8).fill(false));
+  const [solos, setSolos] = useState<boolean[]>(Array(8).fill(false));
+
+  // Tap Tempo timestamp tracker
+  const tapTimesRef = useRef<number[]>([]);
 
   // Initialize with the iconic "Rio Rider" Brazilian Phonk groove
   const [pattern, setPattern] = useState<boolean[][]>(() => {
@@ -68,6 +77,89 @@ export const Sequencer: React.FC<SequencerProps> = ({ onPlayStateChange, externa
     const clamped = Math.max(70, Math.min(190, newBpm));
     setBpm(clamped);
     audioEngine.setBpm(clamped);
+  };
+
+  const handleTapTempo = () => {
+    const now = Date.now();
+    const times = tapTimesRef.current.filter((t) => now - t < 2500);
+    times.push(now);
+    tapTimesRef.current = times;
+
+    if (times.length >= 2) {
+      const intervals = [];
+      for (let i = 1; i < times.length; i++) {
+        intervals.push(times[i] - times[i - 1]);
+      }
+      const avgInterval = intervals.reduce((a, b) => a + b, 0) / intervals.length;
+      const calculatedBpm = Math.round(60000 / avgInterval);
+      if (calculatedBpm >= 60 && calculatedBpm <= 200) {
+        handleBpmChange(calculatedBpm);
+        toast({
+          title: `Tap Tempo: ${calculatedBpm} BPM`,
+          description: `Calculated from ${times.length} rhythmic taps.`,
+        });
+      }
+    }
+  };
+
+  const handleSwingChange = (newSwing: number) => {
+    const clamped = Math.max(0, Math.min(50, newSwing));
+    setSwing(clamped);
+    audioEngine.setSwing(clamped / 100);
+  };
+
+  const toggleMute = (trackIdx: number) => {
+    const newMutes = [...mutes];
+    newMutes[trackIdx] = !newMutes[trackIdx];
+    setMutes(newMutes);
+    audioEngine.setMute(trackIdx, newMutes[trackIdx]);
+  };
+
+  const toggleSolo = (trackIdx: number) => {
+    const newSolos = [...solos];
+    newSolos[trackIdx] = !newSolos[trackIdx];
+    setSolos(newSolos);
+    audioEngine.setSolo(trackIdx, newSolos[trackIdx]);
+  };
+
+  const handleToggleLiveRecording = async () => {
+    if (!isRecording) {
+      const started = audioEngine.startLiveRecording();
+      if (started) {
+        setIsRecording(true);
+        // Automatically start playback if not already playing
+        if (!isPlaying) {
+          handlePlayToggle();
+        }
+        toast({
+          title: '🔴 Recording Session Started!',
+          description: 'Live performance is being captured directly from the master bus.',
+        });
+      } else {
+        toast({
+          title: 'Recording Not Supported',
+          description: 'Browser audio capture stream unavailable.',
+          variant: 'destructive',
+        });
+      }
+    } else {
+      setIsRecording(false);
+      const audioBlob = await audioEngine.stopLiveRecording();
+      if (audioBlob) {
+        const url = URL.createObjectURL(audioBlob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `phonk-wave-brasil-session-${Date.now()}.webm`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        toast({
+          title: 'Live Session Downloaded! 🎧',
+          description: 'High-quality WebM master recording saved.',
+        });
+      }
+    }
   };
 
   const handleClear = () => {
@@ -171,6 +263,42 @@ export const Sequencer: React.FC<SequencerProps> = ({ onPlayStateChange, externa
             />
           </div>
 
+          {/* Tap Tempo Button */}
+          <button
+            onClick={handleTapTempo}
+            title="Tap rhythmic pulses to calculate BPM"
+            className="px-2.5 py-1 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl text-[11px] font-mono text-zinc-300 hover:text-white transition-all active:scale-95"
+          >
+            TAP
+          </button>
+
+          {/* Brazilian Swing Control */}
+          <div className="flex items-center gap-1 bg-black/40 border border-white/10 px-2 py-1 rounded-xl text-[11px] font-mono">
+            <SlidersHorizontal size={11} className="text-yellow-400" />
+            <span className="text-zinc-400">Swing:</span>
+            <button
+              onClick={() => handleSwingChange((swing + 15) % 60)}
+              className="font-bold text-yellow-400 hover:text-yellow-300 px-1"
+              title="Click to cycle Brazilian funk syncopation swing (0%, 15%, 30%, 45%)"
+            >
+              {swing}%
+            </button>
+          </div>
+
+          {/* Live Recording Button */}
+          <button
+            onClick={handleToggleLiveRecording}
+            className={`flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-bold transition-all active:scale-95 border ${
+              isRecording
+                ? 'bg-red-600/30 border-red-500 text-red-300 animate-pulse shadow-[0_0_12px_rgba(239,68,68,0.5)]'
+                : 'bg-white/5 hover:bg-white/10 border-white/10 text-zinc-300'
+            }`}
+            title={isRecording ? 'Click to Stop & Save Live Recording' : 'Start Live Master Audio Recording'}
+          >
+            <Circle size={10} fill={isRecording ? '#EF4444' : 'currentColor'} className={isRecording ? 'text-red-500' : 'text-zinc-400'} />
+            <span>{isRecording ? 'REC LIVE' : 'REC'}</span>
+          </button>
+
           {/* Play/Stop Button with Apple spring styling */}
           <button
             onClick={handlePlayToggle}
@@ -214,7 +342,7 @@ export const Sequencer: React.FC<SequencerProps> = ({ onPlayStateChange, externa
 
       {/* 16-Step Step Numbers Header */}
       <div className="flex items-center gap-2 mb-2 text-[10px] font-mono text-zinc-400">
-        <div className="w-24 shrink-0 font-bold uppercase tracking-wider text-right pr-2">Track</div>
+        <div className="w-32 shrink-0 font-bold uppercase tracking-wider text-right pr-2">Track & FX</div>
         <div className="grid grid-cols-16 flex-1 gap-1 text-center">
           {Array(16).fill(null).map((_, i) => {
             const isBeatStart = i % 4 === 0;
@@ -237,22 +365,58 @@ export const Sequencer: React.FC<SequencerProps> = ({ onPlayStateChange, externa
         </div>
       </div>
 
-      {/* 8 Track Step Grid */}
+      {/* 8 Track Step Grid with Mute & Solo */}
       <div className="space-y-1.5 mb-5">
         {TRACK_CONFIGS.map((track, trackIdx) => {
+          const isMuted = mutes[trackIdx];
+          const isSoloed = solos[trackIdx];
+
           return (
             <div key={track.id} className="flex items-center gap-2 group">
-              {/* Track Label Button */}
-              <button
-                onClick={() => audioEngine.triggerPad(trackIdx)}
-                className="w-24 shrink-0 py-1 px-2 rounded-lg bg-black/40 border border-white/5 hover:border-white/20 text-left transition-all active:scale-95 flex items-center justify-between"
-                title="Click to preview track sound"
-              >
-                <span className="text-[11px] font-bold truncate" style={{ color: track.color }}>
-                  {track.name.replace(/[^a-zA-Z0-9 ]/g, '').trim()}
-                </span>
-                <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: track.color }} />
-              </button>
+              {/* Track Controls (Preview button + Mute + Solo) */}
+              <div className="w-32 shrink-0 flex items-center gap-1">
+                {/* Track Label Button */}
+                <button
+                  onClick={() => audioEngine.triggerPad(trackIdx)}
+                  className={`flex-1 py-1 px-1.5 rounded-lg border text-left transition-all active:scale-95 flex items-center justify-between overflow-hidden ${
+                    isMuted
+                      ? 'bg-zinc-950/80 border-white/5 opacity-50'
+                      : 'bg-black/40 border-white/5 hover:border-white/20'
+                  }`}
+                  title="Click to preview track sound"
+                >
+                  <span className="text-[10px] font-bold truncate" style={{ color: isMuted ? '#71717A' : track.color }}>
+                    {track.name.replace(/[^a-zA-Z0-9 ]/g, '').trim()}
+                  </span>
+                  <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: isMuted ? '#71717A' : track.color }} />
+                </button>
+
+                {/* Mute Button (M) */}
+                <button
+                  onClick={() => toggleMute(trackIdx)}
+                  className={`w-5 h-6 rounded text-[9px] font-bold font-mono transition-all ${
+                    isMuted
+                      ? 'bg-red-500 text-white shadow-[0_0_6px_#EF4444]'
+                      : 'bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-white'
+                  }`}
+                  title="Mute Track"
+                >
+                  M
+                </button>
+
+                {/* Solo Button (S) */}
+                <button
+                  onClick={() => toggleSolo(trackIdx)}
+                  className={`w-5 h-6 rounded text-[9px] font-bold font-mono transition-all ${
+                    isSoloed
+                      ? 'bg-yellow-400 text-black shadow-[0_0_6px_#FFD000]'
+                      : 'bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-white'
+                  }`}
+                  title="Solo Track"
+                >
+                  S
+                </button>
+              </div>
 
               {/* 16 Step Buttons */}
               <div className="grid grid-cols-16 flex-1 gap-1">
@@ -265,6 +429,10 @@ export const Sequencer: React.FC<SequencerProps> = ({ onPlayStateChange, externa
                       key={stepIdx}
                       onClick={() => toggleStep(trackIdx, stepIdx)}
                       className={`h-7 rounded-md border transition-all duration-75 select-none relative overflow-hidden active:scale-90 ${
+                        isMuted
+                          ? 'opacity-40'
+                          : ''
+                      } ${
                         isActive
                           ? 'shadow-md'
                           : isBeatBoundary
@@ -282,7 +450,7 @@ export const Sequencer: React.FC<SequencerProps> = ({ onPlayStateChange, externa
                           : isCurrentPlayhead
                           ? '#00F59B'
                           : undefined,
-                        boxShadow: isActive
+                        boxShadow: isActive && !isMuted
                           ? `0 0 12px ${track.glow}`
                           : isCurrentPlayhead
                           ? '0 0 8px rgba(0,245,155,0.4)'
